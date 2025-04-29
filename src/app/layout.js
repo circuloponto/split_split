@@ -1,6 +1,5 @@
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import { ConvexClientProvider } from './lib/convex';
 import { AuthProvider } from './lib/auth-context';
 import { Toaster } from 'react-hot-toast';
 
@@ -23,35 +22,33 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
       <body className="antialiased" suppressHydrationWarning={true}>
-        <ConvexClientProvider>
-          <AuthProvider>
-            {children}
-            <Toaster 
-              position="top-right"
-              toastOptions={{
+        <AuthProvider>
+          {children}
+          <Toaster 
+            position="top-right"
+            toastOptions={{
+              duration: 3000,
+              style: {
+                background: '#363636',
+                color: '#fff',
+              },
+              success: {
                 duration: 3000,
                 style: {
-                  background: '#363636',
+                  background: '#22c55e',
                   color: '#fff',
                 },
-                success: {
-                  duration: 3000,
-                  style: {
-                    background: '#22c55e',
-                    color: '#fff',
-                  },
+              },
+              error: {
+                duration: 4000,
+                style: {
+                  background: '#ef4444',
+                  color: '#fff',
                 },
-                error: {
-                  duration: 4000,
-                  style: {
-                    background: '#ef4444',
-                    color: '#fff',
-                  },
-                },
-              }}
-            />
-          </AuthProvider>
-        </ConvexClientProvider>
+              },
+            }}
+          />
+        </AuthProvider>
       </body>
     </html>
   );

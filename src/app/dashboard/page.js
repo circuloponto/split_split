@@ -92,7 +92,7 @@ export default function Dashboard() {
       <div className="flex justify-center items-center min-h-screen bg-gradient-to-br from-indigo-50 to-white">
         <div className="text-center p-8 bg-white rounded-xl shadow-lg max-w-md mx-auto">
           <h2 className="text-2xl font-semibold mb-2 text-gray-800">Getting things ready...</h2>
-          <p className="text-gray-600 mb-6">We're setting up your account.</p>
+          <p className="text-gray-600 mb-6">We&apos;re setting up your account.</p>
           <button 
             onClick={() => window.location.reload()}
             className="bg-indigo-600 text-white py-2 px-6 rounded-lg hover:bg-indigo-700 transition-colors shadow-md"
@@ -144,7 +144,7 @@ export default function Dashboard() {
               
               {userGroups.length === 0 ? (
                 <div>
-                  <p className="mb-6 text-gray-600">You don't have any groups yet.</p>
+                  <p className="mb-6 text-gray-600">You don&apos;t have any groups yet.</p>
                   <button
                     onClick={() => setSelectedGroupId('new')}
                     className="w-full bg-indigo-600 text-white py-3 px-4 rounded-lg hover:bg-indigo-700 transition-colors shadow-sm"
