@@ -48,16 +48,16 @@ export default function ExpenseManager({
   useEffect(() => {
     if (groupMembers && groupMembers.length > 0) {
       const numMembers = groupMembers.length;
-      const amountValue = parseFloat(amount) || 0;
-      const equalShare = numMembers > 0 ? amountValue / numMembers : 0;
+      // Initialize with equal percentages (100% divided by number of members)
+      const equalPercentage = (100 / numMembers).toFixed(1);
       
       const initialSplits = {};
       groupMembers.forEach(member => {
-        initialSplits[member._id] = equalShare;
+        initialSplits[member._id] = equalPercentage;
       });
       setCustomSplits(initialSplits);
     }
-  }, [groupMembers, amount]);
+  }, [groupMembers]);
   
   // Update expenses when props change
   useEffect(() => {
@@ -98,18 +98,43 @@ export default function ExpenseManager({
           splits[splits.length - 1].amount = Math.round((splits[splits.length - 1].amount + adjustment) * 100) / 100;
         }
       } else if (splitType === "custom") {
-        // Custom split based on user input
-        splits = Object.entries(customSplits).map(([userId, splitAmount]) => ({
-          userId,
-          amount: Math.round(parseFloat(splitAmount) * 100) / 100 || 0
-        }));
+        // Custom split based on percentages
+        const totalAmount = parseFloat(amount);
         
-        // Validate that the sum of splits equals the total amount
-        const totalSplit = splits.reduce((sum, split) => sum + split.amount, 0);
-        if (Math.abs(totalSplit - totalAmount) > 0.01) {
-          toast.error(`The sum of splits (${totalSplit.toFixed(2)}) doesn't match the total amount (${totalAmount.toFixed(2)})`);
+        // First truncate all percentages to 1 decimal place
+        const truncatedSplits = {};
+        Object.entries(customSplits).forEach(([userId, percentage]) => {
+          truncatedSplits[userId] = parseFloat(parseFloat(percentage).toFixed(1));
+        });
+        
+        // Validate that the sum of percentages is close to 100%
+        const totalAllocated = Object.values(truncatedSplits).reduce(
+          (sum, val) => sum + (val || 0), 
+          0
+        );
+        
+        const isBalanced = Math.abs(totalAllocated - 100) < 0.1;
+        if (!isBalanced) {
+          toast.error(`The sum of percentages (${totalAllocated.toFixed(1)}%) should equal 100%`);
           setIsSubmitting(false);
           return;
+        }
+        
+        splits = Object.entries(truncatedSplits).map(([userId, percentage]) => {
+          const percentValue = percentage || 0;
+          // Calculate the actual amount based on the percentage
+          const splitAmount = (percentValue / 100) * totalAmount;
+          return {
+            userId,
+            amount: Math.round(splitAmount * 100) / 100 || 0
+          };
+        });
+        
+        // Adjust the last split to account for rounding errors
+        const totalSplit = splits.reduce((sum, split) => sum + split.amount, 0);
+        if (Math.abs(totalSplit - totalAmount) > 0.01) {
+          const adjustment = totalAmount - totalSplit;
+          splits[splits.length - 1].amount = Math.round((splits[splits.length - 1].amount + adjustment) * 100) / 100;
         }
       }
       
@@ -207,9 +232,8 @@ export default function ExpenseManager({
     0
   );
   
-  // Check if the allocated amount matches the total
-  const amountValue = parseFloat(amount) || 0;
-  const isBalanced = Math.abs(totalAllocated - amountValue) < 0.01;
+  // Check if the allocated percentage is close to 100%
+  const isBalanced = Math.abs(totalAllocated - 100) < 0.1;
   
   return (
     <div className="space-y-8">
@@ -302,20 +326,28 @@ export default function ExpenseManager({
                 {groupMembers.map(member => (
                   <div key={member._id} className="flex items-center">
                     <label className="w-1/3 text-sm text-gray-700">{member.name}</label>
-                    <input
-                      type="number"
-                      value={customSplits[member._id] || 0}
-                      onChange={(e) => handleSplitChange(member._id, e.target.value)}
-                      className="w-2/3 border border-gray-300 rounded-lg shadow-sm p-2 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
-                      step="0.01"
-                      min="0"
-                    />
+                    <div className="w-2/3 flex items-center">
+                      <input
+                        type="number"
+                        value={customSplits[member._id] === '0' ? '' : customSplits[member._id] || ''}
+                        onChange={(e) => {
+                          // Allow direct input of values, don't truncate yet
+                          handleSplitChange(member._id, e.target.value === '' ? '0' : e.target.value);
+                        }}
+                        className="flex-1 border border-gray-300 rounded-lg shadow-sm p-2 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+                        step="0.1"
+                        min="0"
+                        max="100"
+                        placeholder="0"
+                      />
+                      <span className="ml-2 text-gray-600">%</span>
+                    </div>
                   </div>
                 ))}
                 <div className="flex justify-between text-sm mt-3 font-medium">
                   <span>Total:</span>
                   <span className={isBalanced ? "text-green-600" : "text-red-600"}>
-                    ${totalAllocated.toFixed(2)} / ${amountValue.toFixed(2)}
+                    {totalAllocated.toFixed(1)}% / 100%
                   </span>
                 </div>
               </div>

@@ -6,9 +6,11 @@ import toast from 'react-hot-toast';
 
 export default function DebtSimplifier({ groupId, expenses = [], members = [] }) {
   const [simplifiedDebts, setSimplifiedDebts] = useState([]);
+  const [originalDebts, setOriginalDebts] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [debugInfo, setDebugInfo] = useState({ expenses: 0, members: 0 });
   const [error, setError] = useState(null);
+  const [showTooltip, setShowTooltip] = useState(false);
   
   // Calculate debts when expenses or members change
   useEffect(() => {
@@ -27,6 +29,7 @@ export default function DebtSimplifier({ groupId, expenses = [], members = [] })
   // Calculate simplified debts
   const calculateSimplifiedDebts = () => {
     setIsLoading(true);
+    setError(null);
     
     try {
       // If no expenses, return empty result
@@ -36,7 +39,48 @@ export default function DebtSimplifier({ groupId, expenses = [], members = [] })
         return;
       }
       
-      // Step 1: Calculate net balances for each user
+      console.log("Starting debt simplification with expenses:", expenses);
+      console.log("Group members:", members);
+      
+      // Step 1: Extract original debts from expense splits for the tooltip display
+      const originalDebtList = [];
+      
+      // Extract original debts directly from the expense splits
+      expenses.forEach(expense => {
+        // Skip invalid expenses
+        if (!expense.paidBy || !expense.amount || expense.amount <= 0 || !expense.splits) {
+          console.warn("Skipping invalid expense:", expense);
+          return;
+        }
+        
+        const payerId = expense.paidBy;
+        
+        // Each split represents a debt from the split owner to the payer
+        // (unless the split owner is the payer themselves)
+        expense.splits.forEach(split => {
+          // Validate the split
+          if (!split.userId || split.userId === payerId) {
+            return;
+          }
+          
+          const splitAmount = parseFloat(split.amount);
+          if (isNaN(splitAmount) || splitAmount <= 0) {
+            return;
+          }
+          
+          originalDebtList.push({
+            from: split.userId, // The person who owes money
+            to: payerId,        // The person who paid
+            amount: splitAmount,
+            description: expense.description
+          });
+        });
+      });
+      
+      console.log("Original debts extracted for tooltip:", originalDebtList);
+      setOriginalDebts(originalDebtList);
+      
+      // Step 2: Calculate net balance for each person
       const balances = {};
       
       // Initialize balances for all members
@@ -44,51 +88,89 @@ export default function DebtSimplifier({ groupId, expenses = [], members = [] })
         balances[member._id] = 0;
       });
       
-      // Process all expenses
-      expenses.forEach(expense => {
-        // The person who paid gets credit
-        if (!balances[expense.paidBy]) {
-          balances[expense.paidBy] = 0;
+      // For each original debt, update the balances
+      originalDebtList.forEach(debt => {
+        // Ensure the debt amount is a valid number
+        const amount = parseFloat(debt.amount);
+        if (isNaN(amount)) {
+          console.warn("Debt has invalid amount:", debt);
+          return;
         }
-        balances[expense.paidBy] += expense.amount;
         
-        // Each person in the split owes money
-        if (expense.splits && Array.isArray(expense.splits)) {
-          expense.splits.forEach(split => {
-            if (!balances[split.userId]) {
-              balances[split.userId] = 0;
-            }
-            balances[split.userId] -= split.amount;
-          });
+        if (!balances.hasOwnProperty(debt.from)) {
+          console.warn(`Debtor ${debt.from} not in balances, adding them`);
+          balances[debt.from] = 0;
         }
+        
+        if (!balances.hasOwnProperty(debt.to)) {
+          console.warn(`Creditor ${debt.to} not in balances, adding them`);
+          balances[debt.to] = 0;
+        }
+        
+        balances[debt.from] -= amount; // Debtor's balance decreases
+        balances[debt.to] += amount;   // Creditor's balance increases
       });
       
-      // Step 2: Separate into debtors and creditors
+      console.log("Net balances calculated:", balances);
+      
+      // Verify that the sum of all balances is close to zero
+      const sumOfBalances = Object.values(balances).reduce((sum, balance) => sum + balance, 0);
+      if (Math.abs(sumOfBalances) > 0.1) {
+        console.warn(`Sum of balances is not zero: ${sumOfBalances.toFixed(2)}`);
+      }
+      
+      // Step 3: Separate people into debtors (negative balance) and creditors (positive balance)
       const debtors = [];
       const creditors = [];
       
-      Object.entries(balances).forEach(([userId, balance]) => {
+      Object.entries(balances).forEach(([personId, balance]) => {
         // Round to 2 decimal places to avoid floating point issues
         const roundedBalance = Math.round(balance * 100) / 100;
         
         if (roundedBalance < -0.01) {
-          debtors.push({ userId, amount: -roundedBalance });
+          // This person owes money (negative balance)
+          debtors.push({
+            id: personId,
+            amount: Math.abs(roundedBalance) // Store as positive amount
+          });
         } else if (roundedBalance > 0.01) {
-          creditors.push({ userId, amount: roundedBalance });
+          // This person is owed money (positive balance)
+          creditors.push({
+            id: personId,
+            amount: roundedBalance
+          });
         }
-        // Ignore users with zero balance (or very close to zero)
+        // Ignore people with zero balance (or very close to zero)
       });
       
-      // Sort by amount (largest first)
+      // Calculate total debt and total credit to ensure they match
+      const totalDebt = debtors.reduce((sum, debtor) => sum + debtor.amount, 0);
+      const totalCredit = creditors.reduce((sum, creditor) => sum + creditor.amount, 0);
+      
+      console.log(`Total debt: $${totalDebt.toFixed(2)}, Total credit: $${totalCredit.toFixed(2)}`);
+      
+      if (Math.abs(totalDebt - totalCredit) > 0.1) {
+        console.warn(`Debt and credit totals don't match: Debt=$${totalDebt.toFixed(2)}, Credit=$${totalCredit.toFixed(2)}`);
+      }
+      
+      // Sort by amount (largest first) for more efficient matching
       debtors.sort((a, b) => b.amount - a.amount);
       creditors.sort((a, b) => b.amount - a.amount);
       
-      // Step 3: Create simplified payments
-      const payments = [];
+      console.log("Debtors identified:", debtors);
+      console.log("Creditors identified:", creditors);
       
-      while (debtors.length > 0 && creditors.length > 0) {
-        const debtor = debtors[0];
-        const creditor = creditors[0];
+      // Step 4: Create simplified payments
+      const simplifiedPayments = [];
+      
+      // Make a copy of the debtors and creditors arrays to avoid modifying the originals
+      const debtorsQueue = [...debtors];
+      const creditorsQueue = [...creditors];
+      
+      // Keep processing until either all debtors or all creditors are settled
+      while (debtorsQueue.length > 0 && creditorsQueue.length > 0) {
+        const debtor = debtorsQueue[0];
+        const creditor = creditorsQueue[0];
         
         // Calculate payment amount (minimum of debt or credit)
         const paymentAmount = Math.min(debtor.amount, creditor.amount);
@@ -97,48 +179,54 @@ export default function DebtSimplifier({ groupId, expenses = [], members = [] })
         const roundedAmount = Math.round(paymentAmount * 100) / 100;
         
         if (roundedAmount > 0.01) {
-          payments.push({
-            from: debtor.userId,
-            to: creditor.userId,
+          console.log(`Creating payment: ${debtor.id} pays $${roundedAmount.toFixed(2)} to ${creditor.id}`);
+          
+          simplifiedPayments.push({
+            from: debtor.id,
+            to: creditor.id,
             amount: roundedAmount
           });
         }
         
-        // Update balances
+        // Update remaining balances
         debtor.amount -= paymentAmount;
         creditor.amount -= paymentAmount;
         
-        // Remove users with zero balance
+        console.log(`Updated balances - Debtor ${debtor.id}: $${debtor.amount.toFixed(2)}, Creditor ${creditor.id}: $${creditor.amount.toFixed(2)}`);
+        
+        // Remove people with zero balance (or very close to zero)
         if (debtor.amount < 0.01) {
-          debtors.shift();
+          console.log(`Removing settled debtor: ${debtor.id}`);
+          debtorsQueue.shift();
         }
         
         if (creditor.amount < 0.01) {
-          creditors.shift();
+          console.log(`Removing settled creditor: ${creditor.id}`);
+          creditorsQueue.shift();
         }
       }
       
-      // Check if there's any remaining balance (due to rounding errors)
-      const remainingDebtors = debtors.filter(d => d.amount > 0.01);
-      const remainingCreditors = creditors.filter(c => c.amount > 0.01);
+      console.log("Simplified payments generated:", simplifiedPayments);
       
-      if (remainingDebtors.length > 0 || remainingCreditors.length > 0) {
-        const totalRemaining = remainingDebtors.reduce((sum, d) => sum + d.amount, 0) || 
-                              remainingCreditors.reduce((sum, c) => sum + c.amount, 0) || 0;
-        
-        if (totalRemaining > 0.1) {
-          // Only show warning if the amount is significant (more than 10 cents)
-          toast.warning(`There's a small imbalance of $${totalRemaining.toFixed(2)} in the calculations. This might be due to rounding.`);
-        }
-      }
+      // Calculate the total of simplified debts for validation
+      const totalSimplifiedDebt = simplifiedPayments.reduce((sum, payment) => sum + payment.amount, 0);
+      const totalOriginalDebt = originalDebtList.reduce((sum, debt) => sum + parseFloat(debt.amount), 0);
       
-      setSimplifiedDebts(payments);
-      setError(null);
+      console.log(`Validation - Original total: $${totalOriginalDebt.toFixed(2)}, Simplified total: $${totalSimplifiedDebt.toFixed(2)}`);
+      
+      // Update state with the results
+      setSimplifiedDebts(simplifiedPayments);
+      setDebugInfo({
+        expenses: expenses.length,
+        members: members.length,
+        originalDebts: originalDebtList.length,
+        simplifiedDebts: simplifiedPayments.length,
+        originalTotal: totalOriginalDebt.toFixed(2),
+        simplifiedTotal: totalSimplifiedDebt.toFixed(2)
+      });
     } catch (error) {
-      console.error("Error calculating debts:", error);
-      toast.error("Error calculating debts. Please try again.");
-      setError("Failed to calculate debts. Please try again.");
-      setSimplifiedDebts([]);
+      console.error("Error calculating simplified debts:", error);
+      setError("Failed to calculate simplified debts. Please try again.");
     } finally {
       setIsLoading(false);
     }
@@ -165,63 +253,113 @@ export default function DebtSimplifier({ groupId, expenses = [], members = [] })
   }
   
   return (
-    <div>
-      <h2 className="text-xl font-semibold mb-6 text-gray-800">Simplified Payments</h2>
-      
-      {isLoading ? (
-        <div className="flex items-center justify-center py-10">
-          <div className="w-10 h-10 border-t-4 border-indigo-600 border-solid rounded-full animate-spin mr-3"></div>
-          <span className="text-gray-600">Calculating payments...</span>
-        </div>
-      ) : error ? (
-        <div className="bg-red-50 text-red-600 p-4 rounded-lg border border-red-100">
-          {error}
-        </div>
-      ) : simplifiedDebts.length === 0 ? (
-        <div className="text-center py-8 bg-green-50 rounded-lg border border-green-100">
-          <svg className="w-12 h-12 text-green-500 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <p className="text-green-700 font-medium">Everyone is settled up!</p>
-          <p className="text-green-600 text-sm mt-1">No payments needed.</p>
-        </div>
-      ) : (
-        <div className="space-y-3 max-h-96 overflow-y-auto custom-scrollbar pr-2">
-          {simplifiedDebts.map((debt, index) => (
-            <div key={index} className="border rounded-lg p-4 bg-white hover:bg-gray-50 transition-colors shadow-sm">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center">
-                  <div className="flex-shrink-0 w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center">
-                    <span className="text-indigo-600 font-medium">
-                      {getUserName(debt.from).charAt(0).toUpperCase()}
-                    </span>
-                  </div>
-                  <div className="mx-3 text-gray-800 font-medium">{getUserName(debt.from)}</div>
-                  <svg className="w-5 h-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-                  </svg>
-                  <div className="mx-3 text-gray-800 font-medium">{getUserName(debt.to)}</div>
-                  <div className="flex-shrink-0 w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
-                    <span className="text-green-600 font-medium">
-                      {getUserName(debt.to).charAt(0).toUpperCase()}
-                    </span>
-                  </div>
+    <div className="mt-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-lg font-medium text-gray-800 flex items-center">
+          Simplified Debts
+          <div className="relative ml-2">
+            <button 
+              className="text-gray-500 hover:text-indigo-600 focus:outline-none"
+              onClick={() => setShowTooltip(!showTooltip)}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2h-1V9z" clipRule="evenodd" />
+              </svg>
+            </button>
+            
+            {showTooltip && (
+              <div 
+                className="absolute z-10 w-72 bg-white p-4 rounded-md shadow-lg border border-gray-200 text-sm text-gray-600 left-0 mt-2"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h4 className="font-medium text-gray-800 mb-2">Original Debts</h4>
+                <div className="max-h-60 overflow-y-auto custom-scrollbar pr-2">
+                  {originalDebts.length === 0 ? (
+                    <p>No debts to display.</p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {originalDebts.map((debt, index) => {
+                        const fromMember = members.find(m => m._id === debt.from);
+                        const toMember = members.find(m => m._id === debt.to);
+                        
+                        if (!fromMember || !toMember) return null;
+                        
+                        return (
+                          <li key={index} className="border-b border-gray-100 pb-1">
+                            <span className="font-medium">{fromMember.name}</span> owes <span className="font-medium">{toMember.name}</span> ${debt.amount.toFixed(2)}
+                            <span className="text-xs text-gray-500 block">for {debt.description}</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
                 </div>
-                <span className="text-lg font-semibold text-indigo-600">${debt.amount.toFixed(2)}</span>
+                <div className="mt-3 pt-2 border-t border-gray-100">
+                  <p className="font-medium">Total Original Debt: ${debugInfo.originalTotal}</p>
+                  <p className="font-medium">Total Simplified Debt: ${debugInfo.simplifiedTotal}</p>
+                  {Math.abs(parseFloat(debugInfo.originalTotal) - parseFloat(debugInfo.simplifiedTotal)) > 0.1 && (
+                    <p className="text-xs mt-2 text-gray-600">
+                      <strong>Note:</strong> The original total is higher than the simplified total because the original counts all individual debts, while the simplified version eliminates circular debts (e.g., if A owes B, B owes C, and C owes A).
+                    </p>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            )}
+          </div>
+        </h3>
+        <div className="text-sm text-gray-500">
+          {isLoading ? (
+            <span>Calculating...</span>
+          ) : (
+            <span>
+              {simplifiedDebts.length} payment{simplifiedDebts.length !== 1 ? 's' : ''}
+            </span>
+          )}
+        </div>
+      </div>
+      
+      {error && (
+        <div className="p-3 bg-red-50 text-red-700 rounded-md">
+          {error}
         </div>
       )}
       
-      {/* Debug info - can be removed in production */}
-      <div className="mt-6 text-xs text-gray-400 flex justify-between items-center">
-        <span>Group: {groupId}</span>
-        <div className="flex space-x-3">
-          <span>Expenses: {debugInfo.expenses}</span>
-          <span>Members: {debugInfo.members}</span>
+      {isLoading ? (
+        <div className="flex justify-center py-4">
+          <div className="animate-pulse text-indigo-600">Calculating optimal payments...</div>
         </div>
-      </div>
+      ) : simplifiedDebts.length === 0 ? (
+        <div className="p-4 bg-gray-50 rounded-md text-gray-600">
+          No debts to settle.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {simplifiedDebts.map((debt, index) => {
+            const fromMember = members.find(m => m._id === debt.from);
+            const toMember = members.find(m => m._id === debt.to);
+            
+            if (!fromMember || !toMember) return null;
+            
+            return (
+              <div key={index} className="p-3 bg-white border rounded-md flex items-center justify-between">
+                <div className="flex items-center">
+                  <div className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center mr-3">
+                    <span className="text-indigo-600 font-medium">
+                      {fromMember.name.charAt(0).toUpperCase()}
+                    </span>
+                  </div>
+                  <div>
+                    <p>
+                      <span className="font-medium">{fromMember.name}</span> pays <span className="font-medium">{toMember.name}</span>
+                    </p>
+                  </div>
+                </div>
+                <div className="font-medium">${debt.amount.toFixed(2)}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
